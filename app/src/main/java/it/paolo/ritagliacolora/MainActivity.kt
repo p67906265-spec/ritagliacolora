@@ -1,13 +1,10 @@
 package it.paolo.ritagliacolora
 
-import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -80,6 +77,9 @@ private fun SchermataPrincipale() {
     // Dimensioni dell'area in cui viene disegnata l'immagine (per convertire coordinate schermo -> bitmap)
     var areaSize by remember { mutableStateOf(IntSize.Zero) }
 
+    // --- Stato per il ridimensionamento in fase di salvataggio (percentuale) ---
+    var percentualeSalvataggio by remember { mutableStateOf(100f) }
+
     val pickImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -92,7 +92,23 @@ private fun SchermataPrincipale() {
                 tratti.clear()
                 cropRect = null
                 modalita = Modalita.NESSUNA
+                percentualeSalvataggio = 100f
             }
+        }
+    }
+
+    // Selettore di sistema "salva con nome": l'utente sceglie dove salvare il file
+    val saveImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/png")
+    ) { uri: Uri? ->
+        val bmpCorrente = bitmap
+        if (uri != null && bmpCorrente != null) {
+            val ok = salvaSuUri(context, bmpCorrente, uri, percentualeSalvataggio)
+            Toast.makeText(
+                context,
+                if (ok) "Immagine salvata" else "Errore nel salvataggio",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -250,6 +266,20 @@ private fun SchermataPrincipale() {
                 }
             }
 
+            // --- Ridimensionamento in percentuale (per ridurre i MB) ---
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Dimensione: ${percentualeSalvataggio.toInt()}%")
+                Slider(
+                    value = percentualeSalvataggio,
+                    onValueChange = { percentualeSalvataggio = it },
+                    valueRange = 10f..100f,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp)
+                )
+            }
+
             // --- Pulsanti di conferma/salvataggio ---
             Row(
                 modifier = Modifier
@@ -275,12 +305,8 @@ private fun SchermataPrincipale() {
                     }) { Text("Applica colore") }
                 }
                 Button(onClick = {
-                    val risultato = salvaInGalleria(context, bmp)
-                    Toast.makeText(
-                        context,
-                        if (risultato) "Immagine salvata nella galleria" else "Errore nel salvataggio",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    val nomeFile = "ritagliacolora_${System.currentTimeMillis()}.png"
+                    saveImageLauncher.launch(nomeFile)
                 }) { Text("Salva") }
             }
         } else {
@@ -370,24 +396,23 @@ private fun applicaMatita(bmp: Bitmap, tratti: List<Tratto>, areaSize: IntSize):
     return risultato
 }
 
-// Salva il bitmap corrente nella galleria del dispositivo
-private fun salvaInGalleria(context: android.content.Context, bmp: Bitmap): Boolean {
+// Ridimensiona il bitmap in base alla percentuale e lo scrive sull'Uri scelto dall'utente
+private fun salvaSuUri(context: android.content.Context, bmp: Bitmap, uri: Uri, percentuale: Float): Boolean {
     return try {
-        val nomeFile = "ritagliacolora_${System.currentTimeMillis()}.png"
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, nomeFile)
-            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RitagliaColora")
-            }
+        val fattore = (percentuale / 100f).coerceIn(0.1f, 1f)
+        val nuovaLarghezza = (bmp.width * fattore).toInt().coerceAtLeast(1)
+        val nuovaAltezza = (bmp.height * fattore).toInt().coerceAtLeast(1)
+
+        val bmpDaSalvare = if (fattore < 1f) {
+            Bitmap.createScaledBitmap(bmp, nuovaLarghezza, nuovaAltezza, true)
+        } else {
+            bmp
         }
-        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        uri?.let {
-            context.contentResolver.openOutputStream(it)?.use { out ->
-                bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
+
+        context.contentResolver.openOutputStream(uri)?.use { out ->
+            bmpDaSalvare.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
-        uri != null
+        true
     } catch (e: Exception) {
         false
     }
