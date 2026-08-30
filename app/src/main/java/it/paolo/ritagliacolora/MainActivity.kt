@@ -294,7 +294,7 @@ private fun SchermataPrincipale() {
 // Piccolo helper per rendere cliccabile un Box senza importare foundation.clickable con ripple custom
 @Composable
 private fun Modifier.clickableSimple(onClick: () -> Unit): Modifier =
-    this.then(androidx.compose.foundation.clickable(onClick = onClick))
+    this.clickable(onClick = onClick)
 
 // Converte il rettangolo di ritaglio (coordinate area/schermo) in coordinate bitmap e ritaglia
 private fun applicaRitaglio(
