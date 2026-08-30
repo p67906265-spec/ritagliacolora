@@ -1,10 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================
 # Da eseguire UNA SOLA VOLTA per creare la firma dell'app.
-# Dopo questo, ogni build (Termux o GitHub Actions) potrà
-# usare la stessa firma per gli aggiornamenti.
+# Usa openssl invece di keytool per evitare il crash
+# "iawareperf/UniPerf" presente su alcuni telefoni Huawei/Honor.
 # ============================================================
 set -e
+
+pkg install -y openssl-tool 2>/dev/null || pkg install -y openssl
 
 mkdir -p ~/keystore
 KEYSTORE_PATH="$HOME/keystore/ritagliacolora.keystore"
@@ -15,22 +17,35 @@ if [ -f "$KEYSTORE_PATH" ]; then
   exit 1
 fi
 
-echo "=== Creazione della firma ==="
-echo "Ti verranno chieste una password (usala sempre, ricordala) e alcuni dati (nome, ecc: puoi anche inventarli)"
-keytool -genkeypair -v \
-  -keystore "$KEYSTORE_PATH" \
-  -alias ritagliacolora \
-  -keyalg RSA -keysize 2048 -validity 10000
+echo "=== Creazione della firma (con openssl) ==="
+echo -n "Scegli una password per la firma (la userai sempre, ricordala): "
+read -s PASSWORD
+echo
+
+TMP_DIR=$(mktemp -d)
+openssl req -x509 -newkey rsa:2048 \
+  -keyout "$TMP_DIR/key.pem" \
+  -out "$TMP_DIR/cert.pem" \
+  -days 10000 -nodes \
+  -subj "/CN=ritagliacolora/O=RitagliaColora/C=IT"
+
+openssl pkcs12 -export \
+  -in "$TMP_DIR/cert.pem" \
+  -inkey "$TMP_DIR/key.pem" \
+  -out "$KEYSTORE_PATH" \
+  -name ritagliacolora \
+  -password "pass:$PASSWORD"
+
+rm -rf "$TMP_DIR"
 
 echo
 echo "=== Fatto ==="
 echo "Firma creata in: $KEYSTORE_PATH"
 echo "NON perdere questo file e la password: senza, non potrai più aggiornare l'app in futuro."
 echo
-echo "Ora crea il file keystore.properties dentro ~/ritagliacolora con questo contenuto"
-echo "(sostituisci LE_TUE_PASSWORD con quelle che hai appena scelto):"
+echo "Ora crea il file keystore.properties dentro ~/ritagliacolora con questo contenuto:"
 echo
 echo "storeFile=$KEYSTORE_PATH"
-echo "storePassword=LA_TUA_PASSWORD"
+echo "storePassword=$PASSWORD"
 echo "keyAlias=ritagliacolora"
-echo "keyPassword=LA_TUA_PASSWORD"
+echo "keyPassword=$PASSWORD"
