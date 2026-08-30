@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SchermataPrincipale() {
     val context = LocalContext.current
