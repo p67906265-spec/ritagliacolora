@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      HA_FIRMA: ${{ secrets.KEYSTORE_BASE64 != '' }}
 
     steps:
       - name: Scarica il codice
@@ -23,7 +25,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Ricrea il file della firma (se configurata nei secrets)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: env.HA_FIRMA == 'true'
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
           cat > keystore.properties << PROPS
@@ -34,22 +36,22 @@ jobs:
           PROPS
 
       - name: Compila l'APK RELEASE firmato
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: env.HA_FIRMA == 'true'
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Compila l'APK DEBUG (nessuna firma configurata)
-        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
+        if: env.HA_FIRMA != 'true'
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Carica l'APK release firmato
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: env.HA_FIRMA == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: RitagliaColora-release-apk
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Carica l'APK debug
-        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
+        if: env.HA_FIRMA != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: RitagliaColora-debug-apk
