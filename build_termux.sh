@@ -8,7 +8,12 @@ set -e
 
 echo "=== 1) Aggiornamento pacchetti e installazione strumenti base ==="
 pkg update -y && pkg upgrade -y
-pkg install -y git openjdk-17 wget unzip
+pkg install -y git wget unzip
+
+# openjdk-17 non è più disponibile su Termux: usiamo openjdk-21 (va bene comunque)
+if ! command -v java >/dev/null 2>&1; then
+  pkg install -y openjdk-21
+fi
 
 echo "=== 2) Storage: consenti l'accesso se richiesto (termux-setup-storage) ==="
 termux-setup-storage || true
