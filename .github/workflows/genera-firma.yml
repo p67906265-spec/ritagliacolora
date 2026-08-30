@@ -1,0 +1,39 @@
+name: Genera Firma
+
+on:
+  workflow_dispatch:
+    inputs:
+      password:
+        description: "Password da usare per la firma (ricordala!)"
+        required: true
+
+jobs:
+  genera:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Crea la firma con openssl
+        run: |
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout key.pem \
+            -out cert.pem \
+            -days 10000 -nodes \
+            -subj "/CN=ritagliacolora/O=RitagliaColora/C=IT"
+
+          openssl pkcs12 -export \
+            -in cert.pem \
+            -inkey key.pem \
+            -out ritagliacolora.keystore \
+            -name ritagliacolora \
+            -password "pass:${{ inputs.password }}"
+
+          base64 -w0 ritagliacolora.keystore > keystore_base64.txt
+
+          echo "Fatto. Scarica l'artifact qui sotto (Summary della esecuzione)."
+
+      - name: Carica i file generati
+        uses: actions/upload-artifact@v4
+        with:
+          name: firma-ritagliacolora
+          path: |
+            ritagliacolora.keystore
+            keystore_base64.txt
