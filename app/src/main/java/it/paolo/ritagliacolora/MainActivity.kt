@@ -35,6 +35,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.util.Locale
 
 // Modalità di lavoro dell'app
 private enum class Modalita { NESSUNA, RITAGLIO, MATITA }
@@ -79,6 +84,32 @@ private fun SchermataPrincipale() {
 
     // --- Stato per il ridimensionamento in fase di salvataggio (percentuale) ---
     var percentualeSalvataggio by remember { mutableStateOf(100f) }
+    var dimensioneOriginaleMB by remember { mutableStateOf<Double?>(null) }
+    var dimensioneRidottaMB by remember { mutableStateOf<Double?>(null) }
+
+    // Calcola quanto pesa l'immagine originale (100%) ogni volta che cambia il bitmap
+    LaunchedEffect(bitmap) {
+        val b = bitmap
+        if (b != null) {
+            val bytes = withContext(Dispatchers.Default) { calcolaDimensioneBytes(b, 1f) }
+            dimensioneOriginaleMB = bytes / (1024.0 * 1024.0)
+        } else {
+            dimensioneOriginaleMB = null
+            dimensioneRidottaMB = null
+        }
+    }
+
+    // Calcola quanto peserà l'immagine alla percentuale scelta (con una piccola attesa
+    // per non ricalcolare ad ogni minimo movimento dello slider)
+    LaunchedEffect(percentualeSalvataggio, bitmap) {
+        val b = bitmap
+        if (b != null) {
+            delay(250)
+            val fattore = (percentualeSalvataggio / 100f).coerceIn(0.1f, 1f)
+            val bytes = withContext(Dispatchers.Default) { calcolaDimensioneBytes(b, fattore) }
+            dimensioneRidottaMB = bytes / (1024.0 * 1024.0)
+        }
+    }
 
     val pickImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -279,6 +310,17 @@ private fun SchermataPrincipale() {
                     modifier = Modifier.weight(1f).padding(start = 8.dp)
                 )
             }
+            // Peso stimato del file: prima (100%) e dopo il ridimensionamento scelto
+            val testoOriginale = dimensioneOriginaleMB?.let {
+                String.format(Locale.ITALY, "%.2f MB", it)
+            } ?: "…"
+            val testoRidotto = dimensioneRidottaMB?.let {
+                String.format(Locale.ITALY, "%.2f MB", it)
+            } ?: "…"
+            Text(
+                text = "Prima: $testoOriginale   →   Dopo: $testoRidotto",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            )
 
             // --- Pulsanti di conferma/salvataggio ---
             Row(
@@ -394,6 +436,21 @@ private fun applicaMatita(bmp: Bitmap, tratti: List<Tratto>, areaSize: IntSize):
         }
     }
     return risultato
+}
+
+// Calcola quanti byte occuperebbe il PNG del bitmap alla percentuale indicata (senza salvarlo)
+private fun calcolaDimensioneBytes(bmp: Bitmap, fattore: Float): Long {
+    val f = fattore.coerceIn(0.1f, 1f)
+    val nuovaLarghezza = (bmp.width * f).toInt().coerceAtLeast(1)
+    val nuovaAltezza = (bmp.height * f).toInt().coerceAtLeast(1)
+    val scaled = if (f < 1f) {
+        Bitmap.createScaledBitmap(bmp, nuovaLarghezza, nuovaAltezza, true)
+    } else {
+        bmp
+    }
+    val baos = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+    return baos.size().toLong()
 }
 
 // Ridimensiona il bitmap in base alla percentuale e lo scrive sull'Uri scelto dall'utente
