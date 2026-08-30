@@ -22,10 +22,34 @@ jobs:
       - name: Rendi eseguibile gradlew
         run: chmod +x gradlew
 
-      - name: Compila l'APK di debug
+      - name: Ricrea il file della firma (se configurata nei secrets)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          cat > keystore.properties << PROPS
+          storeFile=${{ github.workspace }}/release.keystore
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          PROPS
+
+      - name: Compila l'APK RELEASE firmato
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Compila l'APK DEBUG (nessuna firma configurata)
+        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Carica l'APK come download
+      - name: Carica l'APK release firmato
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: RitagliaColora-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Carica l'APK debug
+        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: RitagliaColora-debug-apk

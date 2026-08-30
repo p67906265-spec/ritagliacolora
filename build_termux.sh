@@ -42,8 +42,16 @@ if [ ! -f "./gradlew" ]; then
   gradle wrapper
 fi
 
-./gradlew assembleDebug
-
-echo "=== FATTO ==="
-echo "APK generato in: app/build/outputs/apk/debug/app-debug.apk"
-echo "Copialo con: cp app/build/outputs/apk/debug/app-debug.apk ~/storage/downloads/"
+if [ -f "./keystore.properties" ]; then
+  echo "Firma trovata: compilo la versione RELEASE firmata"
+  ./gradlew assembleRelease
+  echo "=== FATTO ==="
+  echo "APK generato in: app/build/outputs/apk/release/app-release.apk"
+  echo "Copialo con: cp app/build/outputs/apk/release/app-release.apk ~/storage/downloads/"
+else
+  echo "Nessuna firma trovata: compilo la versione DEBUG (vedi genera_firma.sh per creare la firma)"
+  ./gradlew assembleDebug
+  echo "=== FATTO ==="
+  echo "APK generato in: app/build/outputs/apk/debug/app-debug.apk"
+  echo "Copialo con: cp app/build/outputs/apk/debug/app-debug.apk ~/storage/downloads/"
+fi
