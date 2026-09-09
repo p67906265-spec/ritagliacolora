@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -98,6 +99,7 @@ private fun FotoLabScreen() {
     var formato by remember { mutableStateOf(FormatoSalvataggio.JPG) }
     var qualitaJpg by remember { mutableStateOf(90f) }
     var dimensioneStimataMB by remember { mutableStateOf<Double?>(null) }
+    val editorAperto = modalita != Modalita.NESSUNA
 
     fun impostaDimensioniDaBitmap(b: Bitmap) {
         larghezzaTesto = b.width.toString()
@@ -179,7 +181,7 @@ private fun FotoLabScreen() {
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (!editorAperto) TopAppBar(
                 title = { Text("FotoLab") },
                 actions = {
                     TextButton(
@@ -220,7 +222,7 @@ private fun FotoLabScreen() {
                 .fillMaxSize()
                 .padding(inner)
         ) {
-            Row(
+            if (!editorAperto) Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp),
@@ -259,7 +261,7 @@ private fun FotoLabScreen() {
                 return@Column
             }
 
-            if (modalita == Modalita.RITAGLIO) {
+            if (false && modalita == Modalita.RITAGLIO) {
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -295,7 +297,7 @@ private fun FotoLabScreen() {
                 }
             }
 
-            if (modalita == Modalita.MATITA) {
+            if (false && modalita == Modalita.MATITA) {
                 val colori = listOf(
                     Color.Black, Color.Red, Color.Blue, Color.Green,
                     Color.Yellow, Color(0xFFFF8000), Color(0xFF8000FF), Color.White
@@ -341,7 +343,8 @@ private fun FotoLabScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(8.dp)
+                    .background(if (editorAperto) Color.Black else Color.Transparent)
+                    .padding(if (editorAperto) 0.dp else 8.dp)
                     .onSizeChanged { areaSize = it }
             ) {
                 Image(
@@ -373,17 +376,22 @@ private fun FotoLabScreen() {
                                 )
                                 Modalita.RITAGLIO -> detectDragGestures(
                                     onDragStart = { start ->
-                                        cropStart = start
-                                        cropRect = Rect(start, start)
+                                        val bounds = calcolaRettangoloImmagine(bmp, areaSize)
+                                        val punto = Offset(
+                                            start.x.coerceIn(bounds.left, bounds.right),
+                                            start.y.coerceIn(bounds.top, bounds.bottom)
+                                        )
+                                        cropStart = punto
+                                        cropRect = Rect(punto, punto)
                                     },
                                     onDrag = { change, _ ->
                                         val start = cropStart ?: change.position
+                                        val bounds = calcolaRettangoloImmagine(bmp, areaSize)
                                         cropRect = creaRettangoloRitaglio(
                                             start,
                                             change.position,
                                             rapportoRitaglio,
-                                            size.width.toFloat(),
-                                            size.height.toFloat()
+                                            bounds
                                         )
                                     }
                                 )
@@ -410,9 +418,57 @@ private fun FotoLabScreen() {
                         )
                     }
                 }
+
+                if (editorAperto) {
+                    EditorControls(
+                        modalita = modalita,
+                        rapportoRitaglio = rapportoRitaglio,
+                        coloreMatita = coloreMatita,
+                        spessoreMatita = spessoreMatita,
+                        puoConfermare = if (modalita == Modalita.RITAGLIO) cropRect != null else tratti.isNotEmpty(),
+                        onRapporto = { ratio ->
+                            rapportoRitaglio = ratio
+                            cropStart = null
+                            cropRect = if (ratio == null) null else creaRitaglioCentrato(bmp, areaSize, ratio)
+                        },
+                        onColore = { coloreMatita = it },
+                        onSpessore = { spessoreMatita = it },
+                        onAnnulla = {
+                            cropRect = null
+                            cropStart = null
+                            tratti.clear()
+                            trattoCorrente = null
+                            modalita = Modalita.NESSUNA
+                        },
+                        onConferma = {
+                            if (modalita == Modalita.RITAGLIO) {
+                                val rect = cropRect
+                                if (rect != null) {
+                                    val nuovo = applicaRitaglio(bmp, rect, areaSize)
+                                    if (nuovo != null) {
+                                        salvaPerUndo(bmp)
+                                        bitmap = nuovo
+                                        impostaDimensioniDaBitmap(nuovo)
+                                        cropRect = null
+                                        cropStart = null
+                                        modalita = Modalita.NESSUNA
+                                    }
+                                }
+                            } else if (tratti.isNotEmpty()) {
+                                salvaPerUndo(bmp)
+                                val nuovo = applicaMatita(bmp, tratti, areaSize)
+                                bitmap = nuovo
+                                impostaDimensioniDaBitmap(nuovo)
+                                tratti.clear()
+                                trattoCorrente = null
+                                modalita = Modalita.NESSUNA
+                            }
+                        }
+                    )
+                }
             }
 
-            if (modalita == Modalita.RITAGLIO && cropRect != null) {
+            if (false && modalita == Modalita.RITAGLIO && cropRect != null) {
                 Button(
                     onClick = {
                         val nuovo = applicaRitaglio(bmp, cropRect!!, areaSize)
@@ -431,7 +487,7 @@ private fun FotoLabScreen() {
                 ) { Text("Conferma ritaglio") }
             }
 
-            if (modalita == Modalita.MATITA && tratti.isNotEmpty()) {
+            if (false && modalita == Modalita.MATITA && tratti.isNotEmpty()) {
                 Button(
                     onClick = {
                         salvaPerUndo(bmp)
@@ -446,7 +502,7 @@ private fun FotoLabScreen() {
                 ) { Text("Applica disegno") }
             }
 
-            Column(
+            if (!editorAperto) Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 310.dp)
@@ -566,6 +622,125 @@ private fun FotoLabScreen() {
     }
 }
 
+@Composable
+private fun BoxScope.EditorControls(
+    modalita: Modalita,
+    rapportoRitaglio: Float?,
+    coloreMatita: Color,
+    spessoreMatita: Float,
+    puoConfermare: Boolean,
+    onRapporto: (Float?) -> Unit,
+    onColore: (Color) -> Unit,
+    onSpessore: (Float) -> Unit,
+    onAnnulla: () -> Unit,
+    onConferma: () -> Unit
+) {
+    val sfondo = Color.Black.copy(alpha = 0.58f)
+
+    Surface(
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(10.dp),
+        color = sfondo,
+        contentColor = Color.White,
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        if (modalita == Modalita.RITAGLIO) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf(
+                    "Libero" to null,
+                    "1:1" to 1f,
+                    "4:3" to (4f / 3f),
+                    "3:2" to (3f / 2f),
+                    "16:9" to (16f / 9f)
+                ).forEach { (testo, ratio) ->
+                    val selezionato = rapportoRitaglio == ratio
+                    Text(
+                        text = testo,
+                        color = Color.White,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (selezionato) Color(0xFF7656B7).copy(alpha = 0.9f)
+                                else Color.White.copy(alpha = 0.12f)
+                            )
+                            .clickable { onRapporto(ratio) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        } else {
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        Color.Black, Color.Red, Color.Blue, Color.Green,
+                        Color.Yellow, Color(0xFFFF8000), Color(0xFF8000FF), Color.White
+                    ).forEach { colore ->
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(colore)
+                                .then(
+                                    if (colore == coloreMatita) Modifier.border(3.dp, Color.White, CircleShape)
+                                    else Modifier
+                                )
+                                .clickable { onColore(colore) }
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Spessore", color = Color.White)
+                    Slider(
+                        value = spessoreMatita,
+                        onValueChange = onSpessore,
+                        valueRange = 2f..40f,
+                        modifier = Modifier.width(210.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Button(
+            onClick = onAnnulla,
+            colors = ButtonDefaults.buttonColors(containerColor = sfondo, contentColor = Color.White)
+        ) { Text("Annulla") }
+        Button(
+            onClick = onConferma,
+            enabled = puoConfermare,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF6E4EAD).copy(alpha = 0.82f),
+                contentColor = Color.White,
+                disabledContainerColor = sfondo,
+                disabledContentColor = Color.White.copy(alpha = 0.45f)
+            )
+        ) { Text(if (modalita == Modalita.RITAGLIO) "Conferma ritaglio" else "Applica disegno") }
+    }
+}
+
+private fun calcolaRettangoloImmagine(bmp: Bitmap, areaSize: IntSize): Rect {
+    if (areaSize.width <= 0 || areaSize.height <= 0) return Rect.Zero
+    val scale = min(
+        areaSize.width.toFloat() / bmp.width,
+        areaSize.height.toFloat() / bmp.height
+    )
+    val dispW = bmp.width * scale
+    val dispH = bmp.height * scale
+    val left = (areaSize.width - dispW) / 2f
+    val top = (areaSize.height - dispH) / 2f
+    return Rect(left, top, left + dispW, top + dispH)
+}
+
 
 private fun creaRitaglioCentrato(
     bmp: Bitmap,
@@ -611,8 +786,7 @@ private fun creaRettangoloRitaglio(
     start: Offset,
     current: Offset,
     ratio: Float?,
-    maxWidth: Float,
-    maxHeight: Float
+    bounds: Rect
 ): Rect {
     var dx = current.x - start.x
     var dy = current.y - start.y
@@ -627,8 +801,8 @@ private fun creaRettangoloRitaglio(
         }
     }
 
-    val endX = (start.x + dx).coerceIn(0f, maxWidth)
-    val endY = (start.y + dy).coerceIn(0f, maxHeight)
+    val endX = (start.x + dx).coerceIn(bounds.left, bounds.right)
+    val endY = (start.y + dy).coerceIn(bounds.top, bounds.bottom)
 
     return Rect(
         min(start.x, endX),
