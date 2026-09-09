@@ -93,6 +93,7 @@ private fun FotoLabScreen() {
 
     var cropRect by remember { mutableStateOf<Rect?>(null) }
     var cropStart by remember { mutableStateOf<Offset?>(null) }
+    var cropMoveOrigin by remember { mutableStateOf<Rect?>(null) }
     var rapportoRitaglio by remember { mutableStateOf<Float?>(null) }
 
     val tratti = remember { mutableStateListOf<Tratto>() }
@@ -113,6 +114,7 @@ private fun FotoLabScreen() {
     var qualitaJpg by remember { mutableStateOf(90f) }
     var dimensioneStimataMB by remember { mutableStateOf<Double?>(null) }
     var ridimensionaAperto by remember { mutableStateOf(false) }
+    var esportazioneAperta by remember { mutableStateOf(false) }
     val editorAperto = modalita != Modalita.NESSUNA
 
     fun impostaDimensioniDaBitmap(b: Bitmap) {
@@ -202,8 +204,7 @@ private fun FotoLabScreen() {
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 ),
                 actions = {
-                    TextButton(
-                        enabled = undoStack.isNotEmpty() && bitmap != null,
+                    if (undoStack.isNotEmpty() && bitmap != null) TextButton(
                         onClick = {
                             val current = bitmap ?: return@TextButton
                             val previous = undoStack.removeAt(undoStack.lastIndex)
@@ -217,8 +218,7 @@ private fun FotoLabScreen() {
                         }
                     ) { Text("Annulla") }
 
-                    TextButton(
-                        enabled = redoStack.isNotEmpty() && bitmap != null,
+                    if (redoStack.isNotEmpty() && bitmap != null) TextButton(
                         onClick = {
                             val current = bitmap ?: return@TextButton
                             val next = redoStack.removeAt(redoStack.lastIndex)
@@ -244,9 +244,12 @@ private fun FotoLabScreen() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
             ) {
-                Button(onClick = { pickImageLauncher.launch("image/*") }) {
+                Button(
+                    onClick = { pickImageLauncher.launch("image/*") },
+                    modifier = if (bitmap != null) Modifier.weight(1f) else Modifier.width(160.dp)
+                ) {
                     Text("Carica")
                 }
                 if (bitmap != null) {
@@ -255,14 +258,14 @@ private fun FotoLabScreen() {
                         cropRect = null
                         cropStart = null
                         tratti.clear()
-                    }) {
+                    }, modifier = Modifier.weight(1f)) {
                         Text(if (modalita == Modalita.RITAGLIO) "Chiudi ritaglio" else "Ritaglia")
                     }
                     Button(onClick = {
                         modalita = if (modalita == Modalita.MATITA) Modalita.NESSUNA else Modalita.MATITA
                         cropRect = null
                         cropStart = null
-                    }) {
+                    }, modifier = Modifier.weight(1f)) {
                         Text(if (modalita == Modalita.MATITA) "Fine matita" else "Matita")
                     }
                 }
@@ -396,22 +399,50 @@ private fun FotoLabScreen() {
                                 Modalita.RITAGLIO -> detectDragGestures(
                                     onDragStart = { start ->
                                         val bounds = calcolaRettangoloImmagine(bmp, areaSize)
-                                        val punto = Offset(
-                                            start.x.coerceIn(bounds.left, bounds.right),
-                                            start.y.coerceIn(bounds.top, bounds.bottom)
-                                        )
-                                        cropStart = punto
-                                        cropRect = Rect(punto, punto)
+                                        val attuale = cropRect
+                                        if (
+                                            attuale != null &&
+                                            start.x in attuale.left..attuale.right &&
+                                            start.y in attuale.top..attuale.bottom
+                                        ) {
+                                            cropMoveOrigin = attuale
+                                            cropStart = start
+                                        } else {
+                                            cropMoveOrigin = null
+                                            val punto = Offset(
+                                                start.x.coerceIn(bounds.left, bounds.right),
+                                                start.y.coerceIn(bounds.top, bounds.bottom)
+                                            )
+                                            cropStart = punto
+                                            cropRect = Rect(punto, punto)
+                                        }
                                     },
                                     onDrag = { change, _ ->
                                         val start = cropStart ?: change.position
                                         val bounds = calcolaRettangoloImmagine(bmp, areaSize)
-                                        cropRect = creaRettangoloRitaglio(
-                                            start,
-                                            change.position,
-                                            rapportoRitaglio,
-                                            bounds
-                                        )
+                                        val origine = cropMoveOrigin
+                                        cropRect = if (origine != null) {
+                                            spostaRettangoloRitaglio(
+                                                origine,
+                                                change.position - start,
+                                                bounds
+                                            )
+                                        } else {
+                                            creaRettangoloRitaglio(
+                                                start,
+                                                change.position,
+                                                rapportoRitaglio,
+                                                bounds
+                                            )
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        cropStart = null
+                                        cropMoveOrigin = null
+                                    },
+                                    onDragCancel = {
+                                        cropStart = null
+                                        cropMoveOrigin = null
                                     }
                                 )
                                 else -> Unit
@@ -626,14 +657,40 @@ private fun FotoLabScreen() {
                 }
 
                 Spacer(Modifier.height(10.dp))
-                Column(
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1D2029)),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFF1D2029))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .clickable { esportazioneAperta = !esportazioneAperta }
+                        .padding(horizontal = 16.dp, vertical = 13.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                Text("Esportazione", style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Esportazione", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (formato == FormatoSalvataggio.JPG)
+                                "JPG  •  Qualità ${qualitaJpg.roundToInt()}%"
+                            else
+                                "PNG  •  senza perdita di qualità",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFBDB6CC)
+                        )
+                    }
+                    Text(
+                        if (esportazioneAperta) "Chiudi  ▲" else "Apri  ▼",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                if (esportazioneAperta) Column(
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                ) {
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = formato == FormatoSalvataggio.JPG,
@@ -677,6 +734,7 @@ private fun FotoLabScreen() {
                         .fillMaxWidth()
                         .padding(top = 8.dp, bottom = 8.dp)
                 ) { Text("Salva immagine") }
+                }
                 }
             }
         }
@@ -870,6 +928,21 @@ private fun creaRettangoloRitaglio(
         min(start.y, endY),
         max(start.x, endX),
         max(start.y, endY)
+    )
+}
+
+private fun spostaRettangoloRitaglio(
+    rect: Rect,
+    delta: Offset,
+    bounds: Rect
+): Rect {
+    val dx = delta.x.coerceIn(bounds.left - rect.left, bounds.right - rect.right)
+    val dy = delta.y.coerceIn(bounds.top - rect.top, bounds.bottom - rect.bottom)
+    return Rect(
+        left = rect.left + dx,
+        top = rect.top + dy,
+        right = rect.right + dx,
+        bottom = rect.bottom + dy
     )
 }
 
