@@ -19,13 +19,16 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -33,19 +36,26 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
-// Modalità di lavoro dell'app
 private enum class Modalita { NESSUNA, RITAGLIO, MATITA }
+private enum class FormatoSalvataggio { PNG, JPG }
 
-// Un tratto disegnato a matita: colore, spessore e lista di punti (in coordinate del bitmap)
-private data class Tratto(val colore: Color, val spessore: Float, val punti: List<Offset>)
+private data class Tratto(
+    val colore: Color,
+    val spessore: Float,
+    val punti: List<Offset>
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,7 +63,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SchermataPrincipale()
+                    FotoLabScreen()
                 }
             }
         }
@@ -62,158 +72,263 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SchermataPrincipale() {
+private fun FotoLabScreen() {
     val context = LocalContext.current
-
-    // Bitmap correntemente caricato/modificato
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var modalita by remember { mutableStateOf(Modalita.NESSUNA) }
 
-    // --- Stato per il ritaglio ---
-    // Rettangolo di ritaglio in coordinate schermo (relative all'area immagine)
-    var cropRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var cropRect by remember { mutableStateOf<Rect?>(null) }
+    var cropStart by remember { mutableStateOf<Offset?>(null) }
+    var rapportoRitaglio by remember { mutableStateOf<Float?>(null) }
 
-    // --- Stato per la matita ---
     val tratti = remember { mutableStateListOf<Tratto>() }
     var trattoCorrente by remember { mutableStateOf<List<Offset>?>(null) }
     var coloreMatita by remember { mutableStateOf(Color.Red) }
     var spessoreMatita by remember { mutableStateOf(10f) }
-
-    // Dimensioni dell'area in cui viene disegnata l'immagine (per convertire coordinate schermo -> bitmap)
     var areaSize by remember { mutableStateOf(IntSize.Zero) }
 
-    // --- Stato per il ridimensionamento in fase di salvataggio (percentuale) ---
-    var percentualeSalvataggio by remember { mutableStateOf(100f) }
-    var dimensioneOriginaleMB by remember { mutableStateOf<Double?>(null) }
-    var dimensioneRidottaMB by remember { mutableStateOf<Double?>(null) }
+    val undoStack = remember { mutableStateListOf<Bitmap>() }
+    val redoStack = remember { mutableStateListOf<Bitmap>() }
 
-    // Calcola quanto pesa l'immagine originale (100%) ogni volta che cambia il bitmap
-    LaunchedEffect(bitmap) {
-        val b = bitmap
-        if (b != null) {
-            val bytes = withContext(Dispatchers.Default) { calcolaDimensioneBytes(b, 1f) }
-            dimensioneOriginaleMB = bytes / (1024.0 * 1024.0)
-        } else {
-            dimensioneOriginaleMB = null
-            dimensioneRidottaMB = null
-        }
+    var larghezzaTesto by remember { mutableStateOf("") }
+    var altezzaTesto by remember { mutableStateOf("") }
+    var bloccaProporzioni by remember { mutableStateOf(true) }
+    var percentuale by remember { mutableStateOf(100f) }
+
+    var formato by remember { mutableStateOf(FormatoSalvataggio.JPG) }
+    var qualitaJpg by remember { mutableStateOf(90f) }
+    var dimensioneStimataMB by remember { mutableStateOf<Double?>(null) }
+
+    fun impostaDimensioniDaBitmap(b: Bitmap) {
+        larghezzaTesto = b.width.toString()
+        altezzaTesto = b.height.toString()
+        percentuale = 100f
     }
 
-    // Calcola quanto peserà l'immagine alla percentuale scelta (con una piccola attesa
-    // per non ricalcolare ad ogni minimo movimento dello slider)
-    LaunchedEffect(percentualeSalvataggio, bitmap) {
-        val b = bitmap
-        if (b != null) {
-            delay(250)
-            val fattore = (percentualeSalvataggio / 100f).coerceIn(0.1f, 1f)
-            val bytes = withContext(Dispatchers.Default) { calcolaDimensioneBytes(b, fattore) }
-            dimensioneRidottaMB = bytes / (1024.0 * 1024.0)
-        }
+    fun salvaPerUndo(current: Bitmap) {
+        undoStack.add(current.copy(Bitmap.Config.ARGB_8888, true))
+        if (undoStack.size > 10) undoStack.removeAt(0)
+        redoStack.clear()
     }
 
     val pickImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val input = context.contentResolver.openInputStream(it)
-            val bmp = android.graphics.BitmapFactory.decodeStream(input)
-            input?.close()
-            if (bmp != null) {
-                bitmap = bmp.copy(Bitmap.Config.ARGB_8888, true)
-                tratti.clear()
-                cropRect = null
-                modalita = Modalita.NESSUNA
-                percentualeSalvataggio = 100f
+            try {
+                context.contentResolver.openInputStream(it)?.use { input ->
+                    val bmp = android.graphics.BitmapFactory.decodeStream(input)
+                    if (bmp != null) {
+                        val copy = bmp.copy(Bitmap.Config.ARGB_8888, true)
+                        bitmap = copy
+                        impostaDimensioniDaBitmap(copy)
+                        tratti.clear()
+                        cropRect = null
+                        cropStart = null
+                        modalita = Modalita.NESSUNA
+                        undoStack.clear()
+                        redoStack.clear()
+                    }
+                }
+            } catch (_: Exception) {
+                Toast.makeText(context, "Errore nel caricamento", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // Selettore di sistema "salva con nome": l'utente sceglie dove salvare il file
-    val saveImageLauncher = rememberLauncherForActivityResult(
+    fun salvaImmagine(uri: Uri, format: FormatoSalvataggio) {
+        val b = bitmap ?: return
+        val w = larghezzaTesto.toIntOrNull()?.coerceAtLeast(1) ?: b.width
+        val h = altezzaTesto.toIntOrNull()?.coerceAtLeast(1) ?: b.height
+        val ok = salvaSuUri(
+            context = context,
+            bmp = b,
+            uri = uri,
+            larghezza = w,
+            altezza = h,
+            formato = format,
+            qualitaJpg = qualitaJpg.roundToInt()
+        )
+        Toast.makeText(
+            context,
+            if (ok) "Immagine salvata" else "Errore nel salvataggio",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    val savePngLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("image/png")
-    ) { uri: Uri? ->
-        val bmpCorrente = bitmap
-        if (uri != null && bmpCorrente != null) {
-            val ok = salvaSuUri(context, bmpCorrente, uri, percentualeSalvataggio)
-            Toast.makeText(
-                context,
-                if (ok) "Immagine salvata" else "Errore nel salvataggio",
-                Toast.LENGTH_SHORT
-            ).show()
+    ) { uri -> if (uri != null) salvaImmagine(uri, FormatoSalvataggio.PNG) }
+
+    val saveJpgLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/jpeg")
+    ) { uri -> if (uri != null) salvaImmagine(uri, FormatoSalvataggio.JPG) }
+
+    LaunchedEffect(bitmap, larghezzaTesto, altezzaTesto, formato, qualitaJpg) {
+        val b = bitmap ?: return@LaunchedEffect
+        delay(250)
+        val w = larghezzaTesto.toIntOrNull()?.coerceAtLeast(1) ?: b.width
+        val h = altezzaTesto.toIntOrNull()?.coerceAtLeast(1) ?: b.height
+        val bytes = withContext(Dispatchers.Default) {
+            calcolaDimensioneBytes(
+                b, w, h, formato, qualitaJpg.roundToInt()
+            )
         }
+        dimensioneStimataMB = bytes / (1024.0 * 1024.0)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("FotoLab") },
+                actions = {
+                    TextButton(
+                        enabled = undoStack.isNotEmpty() && bitmap != null,
+                        onClick = {
+                            val current = bitmap ?: return@TextButton
+                            val previous = undoStack.removeAt(undoStack.lastIndex)
+                            redoStack.add(current.copy(Bitmap.Config.ARGB_8888, true))
+                            bitmap = previous
+                            impostaDimensioniDaBitmap(previous)
+                            cropRect = null
+                            cropStart = null
+                            tratti.clear()
+                            modalita = Modalita.NESSUNA
+                        }
+                    ) { Text("Annulla") }
 
-        // --- Barra superiore con i pulsanti principali ---
-        TopAppBar(title = { Text("Ritaglia e Colora") })
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(onClick = { pickImageLauncher.launch("image/*") }) {
-                Text("Carica")
-            }
-            if (bitmap != null) {
-                Button(onClick = {
-                    modalita = if (modalita == Modalita.RITAGLIO) Modalita.NESSUNA else Modalita.RITAGLIO
-                    cropRect = null
-                }) {
-                    Text(if (modalita == Modalita.RITAGLIO) "Annulla ritaglio" else "Ritaglia")
+                    TextButton(
+                        enabled = redoStack.isNotEmpty() && bitmap != null,
+                        onClick = {
+                            val current = bitmap ?: return@TextButton
+                            val next = redoStack.removeAt(redoStack.lastIndex)
+                            undoStack.add(current.copy(Bitmap.Config.ARGB_8888, true))
+                            bitmap = next
+                            impostaDimensioniDaBitmap(next)
+                            cropRect = null
+                            cropStart = null
+                            tratti.clear()
+                            modalita = Modalita.NESSUNA
+                        }
+                    ) { Text("Ripristina") }
                 }
-                Button(onClick = {
-                    modalita = if (modalita == Modalita.MATITA) Modalita.NESSUNA else Modalita.MATITA
-                }) {
-                    Text(if (modalita == Modalita.MATITA) "Fine matita" else "Matita")
-                }
-            }
-        }
-
-        // --- Barra opzioni matita (colore e spessore) ---
-        if (modalita == Modalita.MATITA) {
-            val coloriDisponibili = listOf(
-                Color.Black, Color.Red, Color.Blue, Color.Green,
-                Color.Yellow, Color(0xFFFF8000), Color(0xFF8000FF), Color.White
             )
-            LazyRow(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        }
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(coloriDisponibili) { c ->
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .then(
-                                if (c == coloreMatita)
-                                    Modifier.border(3.dp, Color.Gray, CircleShape)
-                                else Modifier
-                            )
-                            .background(c)
-                            .clickableSimple { coloreMatita = c }
+                Button(onClick = { pickImageLauncher.launch("image/*") }) {
+                    Text("Carica")
+                }
+                if (bitmap != null) {
+                    Button(onClick = {
+                        modalita = if (modalita == Modalita.RITAGLIO) Modalita.NESSUNA else Modalita.RITAGLIO
+                        cropRect = null
+                        cropStart = null
+                        tratti.clear()
+                    }) {
+                        Text(if (modalita == Modalita.RITAGLIO) "Chiudi ritaglio" else "Ritaglia")
+                    }
+                    Button(onClick = {
+                        modalita = if (modalita == Modalita.MATITA) Modalita.NESSUNA else Modalita.MATITA
+                        cropRect = null
+                        cropStart = null
+                    }) {
+                        Text(if (modalita == Modalita.MATITA) "Fine matita" else "Matita")
+                    }
+                }
+            }
+
+            val bmp = bitmap
+            if (bmp == null) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Carica una foto per iniziare")
+                }
+                return@Column
+            }
+
+            if (modalita == Modalita.RITAGLIO) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val rapporti = listOf(
+                        "Libero" to null,
+                        "1:1" to 1f,
+                        "4:3" to (4f / 3f),
+                        "3:2" to (3f / 2f),
+                        "16:9" to (16f / 9f)
+                    )
+                    items(rapporti) { item ->
+                        FilterChip(
+                            selected = rapportoRitaglio == item.second,
+                            onClick = {
+                                rapportoRitaglio = item.second
+                                cropRect = null
+                                cropStart = null
+                            },
+                            label = { Text(item.first) }
+                        )
+                    }
+                }
+            }
+
+            if (modalita == Modalita.MATITA) {
+                val colori = listOf(
+                    Color.Black, Color.Red, Color.Blue, Color.Green,
+                    Color.Yellow, Color(0xFFFF8000), Color(0xFF8000FF), Color.White
+                )
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(colori) { c ->
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .then(
+                                    if (c == coloreMatita)
+                                        Modifier.border(3.dp, Color.Gray, CircleShape)
+                                    else Modifier
+                                )
+                                .background(c)
+                                .clickable { coloreMatita = c }
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Spessore")
+                    Slider(
+                        value = spessoreMatita,
+                        onValueChange = { spessoreMatita = it },
+                        valueRange = 2f..40f,
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Spessore")
-                Slider(
-                    value = spessoreMatita,
-                    onValueChange = { spessoreMatita = it },
-                    valueRange = 2f..40f,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
 
-        // --- Area immagine ---
-        val bmp = bitmap
-        if (bmp != null) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -228,13 +343,12 @@ private fun SchermataPrincipale() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Overlay per disegnare ritaglio o tratti a matita
                 ComposeCanvas(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(modalita, bmp) {
-                            if (modalita == Modalita.MATITA) {
-                                detectDragGestures(
+                        .pointerInput(modalita, bmp, rapportoRitaglio) {
+                            when (modalita) {
+                                Modalita.MATITA -> detectDragGestures(
                                     onDragStart = { offset ->
                                         trattoCorrente = listOf(offset)
                                     },
@@ -249,131 +363,236 @@ private fun SchermataPrincipale() {
                                         trattoCorrente = null
                                     }
                                 )
-                            } else if (modalita == Modalita.RITAGLIO) {
-                                detectDragGestures(
-                                    onDragStart = { offset ->
-                                        cropRect = androidx.compose.ui.geometry.Rect(offset, offset)
+                                Modalita.RITAGLIO -> detectDragGestures(
+                                    onDragStart = { start ->
+                                        cropStart = start
+                                        cropRect = Rect(start, start)
                                     },
                                     onDrag = { change, _ ->
-                                        val start = cropRect?.topLeft ?: change.position
-                                        cropRect = androidx.compose.ui.geometry.Rect(start, change.position)
-                                    },
-                                    onDragEnd = {}
+                                        val start = cropStart ?: change.position
+                                        cropRect = creaRettangoloRitaglio(
+                                            start,
+                                            change.position,
+                                            rapportoRitaglio,
+                                            size.width.toFloat(),
+                                            size.height.toFloat()
+                                        )
+                                    }
                                 )
+                                else -> Unit
                             }
                         }
                 ) {
-                    // Disegna i tratti già confermati
                     tratti.forEach { t ->
                         for (i in 0 until t.punti.size - 1) {
-                            drawLine(
-                                color = t.colore,
-                                start = t.punti[i],
-                                end = t.punti[i + 1],
-                                strokeWidth = t.spessore
-                            )
+                            drawLine(t.colore, t.punti[i], t.punti[i + 1], t.spessore)
                         }
                     }
-                    // Disegna il tratto in corso
                     trattoCorrente?.let { punti ->
                         for (i in 0 until punti.size - 1) {
-                            drawLine(
-                                color = coloreMatita,
-                                start = punti[i],
-                                end = punti[i + 1],
-                                strokeWidth = spessoreMatita
-                            )
+                            drawLine(coloreMatita, punti[i], punti[i + 1], spessoreMatita)
                         }
                     }
-                    // Disegna il rettangolo di ritaglio
                     cropRect?.let { r ->
                         drawRect(
                             color = Color.White,
                             topLeft = r.topLeft,
                             size = r.size,
-                            style = Stroke(width = 3f)
+                            style = Stroke(width = 4f)
                         )
                     }
                 }
             }
 
-            // --- Ridimensionamento in percentuale (per ridurre i MB) ---
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Dimensione: ${percentualeSalvataggio.toInt()}%")
-                Slider(
-                    value = percentualeSalvataggio,
-                    onValueChange = { percentualeSalvataggio = it },
-                    valueRange = 10f..100f,
-                    modifier = Modifier.weight(1f).padding(start = 8.dp)
-                )
-            }
-            // Peso stimato del file: prima (100%) e dopo il ridimensionamento scelto
-            val testoOriginale = dimensioneOriginaleMB?.let {
-                String.format(Locale.ITALY, "%.2f MB", it)
-            } ?: "…"
-            val testoRidotto = dimensioneRidottaMB?.let {
-                String.format(Locale.ITALY, "%.2f MB", it)
-            } ?: "…"
-            Text(
-                text = "Prima: $testoOriginale   →   Dopo: $testoRidotto",
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-            )
-
-            // --- Pulsanti di conferma/salvataggio ---
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (modalita == Modalita.RITAGLIO && cropRect != null) {
-                    Button(onClick = {
+            if (modalita == Modalita.RITAGLIO && cropRect != null) {
+                Button(
+                    onClick = {
                         val nuovo = applicaRitaglio(bmp, cropRect!!, areaSize)
                         if (nuovo != null) {
+                            salvaPerUndo(bmp)
                             bitmap = nuovo
-                            tratti.clear()
+                            impostaDimensioniDaBitmap(nuovo)
                             cropRect = null
+                            cropStart = null
                             modalita = Modalita.NESSUNA
                         }
-                    }) { Text("Conferma ritaglio") }
-                }
-                if (modalita == Modalita.MATITA && tratti.isNotEmpty()) {
-                    Button(onClick = {
-                        bitmap = applicaMatita(bmp, tratti, areaSize)
-                        tratti.clear()
-                    }) { Text("Applica colore") }
-                }
-                Button(onClick = {
-                    val nomeFile = "ritagliacolora_${System.currentTimeMillis()}.png"
-                    saveImageLauncher.launch(nomeFile)
-                }) { Text("Salva") }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                ) { Text("Conferma ritaglio") }
             }
-        } else {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("Nessuna immagine caricata")
+
+            if (modalita == Modalita.MATITA && tratti.isNotEmpty()) {
+                Button(
+                    onClick = {
+                        salvaPerUndo(bmp)
+                        val nuovo = applicaMatita(bmp, tratti, areaSize)
+                        bitmap = nuovo
+                        impostaDimensioniDaBitmap(nuovo)
+                        tratti.clear()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                ) { Text("Applica disegno") }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 310.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Ridimensiona", style = MaterialTheme.typography.titleMedium)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = larghezzaTesto,
+                        onValueChange = { value ->
+                            val filtered = value.filter(Char::isDigit)
+                            larghezzaTesto = filtered
+                            val newW = filtered.toIntOrNull()
+                            if (bloccaProporzioni && newW != null && bmp.width > 0) {
+                                altezzaTesto =
+                                    (newW * bmp.height.toFloat() / bmp.width)
+                                        .roundToInt().coerceAtLeast(1).toString()
+                            }
+                        },
+                        label = { Text("Larghezza px") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = altezzaTesto,
+                        onValueChange = { value ->
+                            val filtered = value.filter(Char::isDigit)
+                            altezzaTesto = filtered
+                            val newH = filtered.toIntOrNull()
+                            if (bloccaProporzioni && newH != null && bmp.height > 0) {
+                                larghezzaTesto =
+                                    (newH * bmp.width.toFloat() / bmp.height)
+                                        .roundToInt().coerceAtLeast(1).toString()
+                            }
+                        },
+                        label = { Text("Altezza px") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = bloccaProporzioni,
+                        onCheckedChange = { bloccaProporzioni = it }
+                    )
+                    Text("Mantieni proporzioni")
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${percentuale.roundToInt()}%")
+                    Slider(
+                        value = percentuale,
+                        onValueChange = { p ->
+                            percentuale = p
+                            larghezzaTesto =
+                                (bmp.width * p / 100f).roundToInt().coerceAtLeast(1).toString()
+                            altezzaTesto =
+                                (bmp.height * p / 100f).roundToInt().coerceAtLeast(1).toString()
+                        },
+                        valueRange = 10f..100f,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Text("Formato", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = formato == FormatoSalvataggio.JPG,
+                        onClick = { formato = FormatoSalvataggio.JPG },
+                        label = { Text("JPG") }
+                    )
+                    FilterChip(
+                        selected = formato == FormatoSalvataggio.PNG,
+                        onClick = { formato = FormatoSalvataggio.PNG },
+                        label = { Text("PNG") }
+                    )
+                }
+
+                if (formato == FormatoSalvataggio.JPG) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Qualità ${qualitaJpg.roundToInt()}%")
+                        Slider(
+                            value = qualitaJpg,
+                            onValueChange = { qualitaJpg = it },
+                            valueRange = 40f..100f,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                val stima = dimensioneStimataMB?.let {
+                    String.format(Locale.ITALY, "%.2f MB", it)
+                } ?: "…"
+                Text("Dimensione stimata: $stima")
+
+                Button(
+                    onClick = {
+                        val stamp = System.currentTimeMillis()
+                        if (formato == FormatoSalvataggio.PNG) {
+                            savePngLauncher.launch("FotoLab_$stamp.png")
+                        } else {
+                            saveJpgLauncher.launch("FotoLab_$stamp.jpg")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = 8.dp)
+                ) { Text("Salva immagine") }
             }
         }
     }
 }
 
-// Piccolo helper per rendere cliccabile un Box senza importare foundation.clickable con ripple custom
-@Composable
-private fun Modifier.clickableSimple(onClick: () -> Unit): Modifier =
-    this.clickable(onClick = onClick)
+private fun creaRettangoloRitaglio(
+    start: Offset,
+    current: Offset,
+    ratio: Float?,
+    maxWidth: Float,
+    maxHeight: Float
+): Rect {
+    var dx = current.x - start.x
+    var dy = current.y - start.y
 
-// Converte il rettangolo di ritaglio (coordinate area/schermo) in coordinate bitmap e ritaglia
-private fun applicaRitaglio(
-    bmp: Bitmap,
-    rect: androidx.compose.ui.geometry.Rect,
-    areaSize: IntSize
-): Bitmap? {
+    if (ratio != null && abs(dx) > 1f && abs(dy) > 1f) {
+        val signX = if (dx >= 0f) 1f else -1f
+        val signY = if (dy >= 0f) 1f else -1f
+        if (abs(dx / dy) > ratio) {
+            dx = abs(dy) * ratio * signX
+        } else {
+            dy = abs(dx) / ratio * signY
+        }
+    }
+
+    val endX = (start.x + dx).coerceIn(0f, maxWidth)
+    val endY = (start.y + dy).coerceIn(0f, maxHeight)
+
+    return Rect(
+        min(start.x, endX),
+        min(start.y, endY),
+        max(start.x, endX),
+        max(start.y, endY)
+    )
+}
+
+private fun applicaRitaglio(bmp: Bitmap, rect: Rect, areaSize: IntSize): Bitmap? {
     if (areaSize.width == 0 || areaSize.height == 0) return null
 
-    // L'immagine è mostrata con ContentScale.Fit: calcolo scala e offset reali
-    val scale = minOf(
+    val scale = min(
         areaSize.width.toFloat() / bmp.width,
         areaSize.height.toFloat() / bmp.height
     )
@@ -387,22 +606,25 @@ private fun applicaRitaglio(
     val right = ((rect.right - offsetX) / scale).coerceIn(0f, bmp.width.toFloat())
     val bottom = ((rect.bottom - offsetY) / scale).coerceIn(0f, bmp.height.toFloat())
 
-    val x = minOf(left, right).toInt()
-    val y = minOf(top, bottom).toInt()
-    val w = (kotlin.math.abs(right - left)).toInt().coerceAtLeast(1)
-    val h = (kotlin.math.abs(bottom - top)).toInt().coerceAtLeast(1)
-    if (x + w > bmp.width || y + h > bmp.height) return bmp
+    val x = min(left, right).roundToInt().coerceIn(0, bmp.width - 1)
+    val y = min(top, bottom).roundToInt().coerceIn(0, bmp.height - 1)
+    val x2 = max(left, right).roundToInt().coerceIn(x + 1, bmp.width)
+    val y2 = max(top, bottom).roundToInt().coerceIn(y + 1, bmp.height)
 
-    return Bitmap.createBitmap(bmp, x, y, w, h)
+    return Bitmap.createBitmap(bmp, x, y, x2 - x, y2 - y)
 }
 
-// "Brucia" i tratti a matita disegnati sull'overlay direttamente nel bitmap
-private fun applicaMatita(bmp: Bitmap, tratti: List<Tratto>, areaSize: IntSize): Bitmap {
+private fun applicaMatita(
+    bmp: Bitmap,
+    tratti: List<Tratto>,
+    areaSize: IntSize
+): Bitmap {
     if (areaSize.width == 0 || areaSize.height == 0) return bmp
+
     val risultato = bmp.copy(Bitmap.Config.ARGB_8888, true)
     val canvas = Canvas(risultato)
 
-    val scale = minOf(
+    val scale = min(
         areaSize.width.toFloat() / bmp.width,
         areaSize.height.toFloat() / bmp.height
     )
@@ -425,12 +647,15 @@ private fun applicaMatita(bmp: Bitmap, tratti: List<Tratto>, areaSize: IntSize):
             (t.colore.blue * 255).toInt()
         )
         paint.strokeWidth = t.spessore / scale
+
         for (i in 0 until t.punti.size - 1) {
             val p1 = t.punti[i]
             val p2 = t.punti[i + 1]
             canvas.drawLine(
-                (p1.x - offsetX) / scale, (p1.y - offsetY) / scale,
-                (p2.x - offsetX) / scale, (p2.y - offsetY) / scale,
+                (p1.x - offsetX) / scale,
+                (p1.y - offsetY) / scale,
+                (p2.x - offsetX) / scale,
+                (p2.y - offsetY) / scale,
                 paint
             )
         }
@@ -438,39 +663,54 @@ private fun applicaMatita(bmp: Bitmap, tratti: List<Tratto>, areaSize: IntSize):
     return risultato
 }
 
-// Calcola quanti byte occuperebbe il PNG del bitmap alla percentuale indicata (senza salvarlo)
-private fun calcolaDimensioneBytes(bmp: Bitmap, fattore: Float): Long {
-    val f = fattore.coerceIn(0.1f, 1f)
-    val nuovaLarghezza = (bmp.width * f).toInt().coerceAtLeast(1)
-    val nuovaAltezza = (bmp.height * f).toInt().coerceAtLeast(1)
-    val scaled = if (f < 1f) {
-        Bitmap.createScaledBitmap(bmp, nuovaLarghezza, nuovaAltezza, true)
-    } else {
-        bmp
-    }
+private fun calcolaDimensioneBytes(
+    bmp: Bitmap,
+    larghezza: Int,
+    altezza: Int,
+    formato: FormatoSalvataggio,
+    qualitaJpg: Int
+): Long {
+    val scaled = if (larghezza != bmp.width || altezza != bmp.height) {
+        Bitmap.createScaledBitmap(bmp, larghezza, altezza, true)
+    } else bmp
+
     val baos = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+    if (formato == FormatoSalvataggio.PNG) {
+        scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+    } else {
+        scaled.compress(Bitmap.CompressFormat.JPEG, qualitaJpg.coerceIn(40, 100), baos)
+    }
     return baos.size().toLong()
 }
 
-// Ridimensiona il bitmap in base alla percentuale e lo scrive sull'Uri scelto dall'utente
-private fun salvaSuUri(context: android.content.Context, bmp: Bitmap, uri: Uri, percentuale: Float): Boolean {
+private fun salvaSuUri(
+    context: android.content.Context,
+    bmp: Bitmap,
+    uri: Uri,
+    larghezza: Int,
+    altezza: Int,
+    formato: FormatoSalvataggio,
+    qualitaJpg: Int
+): Boolean {
     return try {
-        val fattore = (percentuale / 100f).coerceIn(0.1f, 1f)
-        val nuovaLarghezza = (bmp.width * fattore).toInt().coerceAtLeast(1)
-        val nuovaAltezza = (bmp.height * fattore).toInt().coerceAtLeast(1)
+        val scaled = if (larghezza != bmp.width || altezza != bmp.height) {
+            Bitmap.createScaledBitmap(bmp, larghezza, altezza, true)
+        } else bmp
 
-        val bmpDaSalvare = if (fattore < 1f) {
-            Bitmap.createScaledBitmap(bmp, nuovaLarghezza, nuovaAltezza, true)
-        } else {
-            bmp
-        }
-
-        context.contentResolver.openOutputStream(uri)?.use { out ->
-            bmpDaSalvare.compress(Bitmap.CompressFormat.PNG, 100, out)
+        val out = context.contentResolver.openOutputStream(uri) ?: return false
+        out.use {
+            if (formato == FormatoSalvataggio.PNG) {
+                scaled.compress(Bitmap.CompressFormat.PNG, 100, it)
+            } else {
+                scaled.compress(
+                    Bitmap.CompressFormat.JPEG,
+                    qualitaJpg.coerceIn(40, 100),
+                    it
+                )
+            }
         }
         true
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         false
     }
 }

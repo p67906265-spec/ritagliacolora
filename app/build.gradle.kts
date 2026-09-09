@@ -6,7 +6,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Carica le credenziali della firma da keystore.properties (file NON presente su GitHub)
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val hasSigningConfig = keystorePropertiesFile.exists()
@@ -22,8 +21,8 @@ android {
         applicationId = "it.paolo.ritagliacolora"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     signingConfigs {
