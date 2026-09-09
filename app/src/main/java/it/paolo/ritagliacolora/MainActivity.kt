@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -62,22 +63,46 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
+            val preferenze = remember {
+                getSharedPreferences("fotolab_impostazioni", MODE_PRIVATE)
+            }
+            var temaScuro by remember {
+                mutableStateOf(preferenze.getBoolean("tema_scuro", true))
+            }
             MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(0xFFA98BFF),
-                    secondary = Color(0xFF8F7AD8),
-                    background = Color(0xFF101218),
-                    surface = Color(0xFF171A22),
-                    surfaceVariant = Color(0xFF222631),
-                    onBackground = Color(0xFFF2EEFA),
-                    onSurface = Color(0xFFF2EEFA)
-                )
+                colorScheme = if (temaScuro) {
+                    darkColorScheme(
+                        primary = Color(0xFFA98BFF),
+                        secondary = Color(0xFF8F7AD8),
+                        background = Color(0xFF101218),
+                        surface = Color(0xFF171A22),
+                        surfaceVariant = Color(0xFF222631),
+                        onBackground = Color(0xFFF2EEFA),
+                        onSurface = Color(0xFFF2EEFA)
+                    )
+                } else {
+                    lightColorScheme(
+                        primary = Color(0xFF6842A8),
+                        secondary = Color(0xFF7656B7),
+                        background = Color(0xFFF6F3FA),
+                        surface = Color(0xFFFFFFFF),
+                        surfaceVariant = Color(0xFFECE6F3),
+                        onBackground = Color(0xFF201D25),
+                        onSurface = Color(0xFF201D25)
+                    )
+                }
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FotoLabScreen()
+                    FotoLabScreen(
+                        temaScuro = temaScuro,
+                        onTemaScuroChange = {
+                            temaScuro = it
+                            preferenze.edit().putBoolean("tema_scuro", it).apply()
+                        }
+                    )
                 }
             }
         }
@@ -86,7 +111,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FotoLabScreen() {
+private fun FotoLabScreen(
+    temaScuro: Boolean,
+    onTemaScuroChange: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var modalita by remember { mutableStateOf(Modalita.NESSUNA) }
@@ -115,6 +143,7 @@ private fun FotoLabScreen() {
     var dimensioneStimataMB by remember { mutableStateOf<Double?>(null) }
     var ridimensionaAperto by remember { mutableStateOf(false) }
     var esportazioneAperta by remember { mutableStateOf(false) }
+    var mostraImpostazioni by remember { mutableStateOf(false) }
     val editorAperto = modalita != Modalita.NESSUNA
 
     fun impostaDimensioniDaBitmap(b: Bitmap) {
@@ -195,6 +224,47 @@ private fun FotoLabScreen() {
         dimensioneStimataMB = bytes / (1024.0 * 1024.0)
     }
 
+    if (mostraImpostazioni) {
+        AlertDialog(
+            onDismissRequest = { mostraImpostazioni = false },
+            title = { Text("Impostazioni") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text("Tema", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FilterChip(
+                            selected = !temaScuro,
+                            onClick = { onTemaScuroChange(false) },
+                            label = { Text("Chiaro") }
+                        )
+                        FilterChip(
+                            selected = temaScuro,
+                            onClick = { onTemaScuroChange(true) },
+                            label = { Text("Scuro") }
+                        )
+                    }
+                    HorizontalDivider()
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("FotoLab", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Paolo Free 1.0",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { mostraImpostazioni = false }) {
+                    Text("Chiudi")
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             if (!editorAperto) TopAppBar(
@@ -204,9 +274,9 @@ private fun FotoLabScreen() {
                     titleContentColor = MaterialTheme.colorScheme.onBackground
                 ),
                 actions = {
-                    if (undoStack.isNotEmpty() && bitmap != null) TextButton(
+                    if (undoStack.isNotEmpty() && bitmap != null) IconButton(
                         onClick = {
-                            val current = bitmap ?: return@TextButton
+                            val current = bitmap ?: return@IconButton
                             val previous = undoStack.removeAt(undoStack.lastIndex)
                             redoStack.add(current.copy(Bitmap.Config.ARGB_8888, true))
                             bitmap = previous
@@ -216,11 +286,11 @@ private fun FotoLabScreen() {
                             tratti.clear()
                             modalita = Modalita.NESSUNA
                         }
-                    ) { Text("Annulla") }
+                    ) { Text("↶", fontSize = 25.sp) }
 
-                    if (redoStack.isNotEmpty() && bitmap != null) TextButton(
+                    if (redoStack.isNotEmpty() && bitmap != null) IconButton(
                         onClick = {
-                            val current = bitmap ?: return@TextButton
+                            val current = bitmap ?: return@IconButton
                             val next = redoStack.removeAt(redoStack.lastIndex)
                             undoStack.add(current.copy(Bitmap.Config.ARGB_8888, true))
                             bitmap = next
@@ -230,7 +300,11 @@ private fun FotoLabScreen() {
                             tratti.clear()
                             modalita = Modalita.NESSUNA
                         }
-                    ) { Text("Ripristina") }
+                    ) { Text("↷", fontSize = 25.sp) }
+
+                    IconButton(onClick = { mostraImpostazioni = true }) {
+                        Text("⚙", fontSize = 23.sp)
+                    }
                 }
             )
         }
@@ -366,7 +440,7 @@ private fun FotoLabScreen() {
                     .fillMaxWidth()
                     .padding(if (editorAperto) 0.dp else 12.dp)
                     .clip(if (editorAperto) RoundedCornerShape(0.dp) else RoundedCornerShape(22.dp))
-                    .background(if (editorAperto) Color.Black else Color(0xFF1B1E27))
+                    .background(if (editorAperto) Color.Black else MaterialTheme.colorScheme.surface)
                     .onSizeChanged { areaSize = it }
             ) {
                 Image(
@@ -563,7 +637,7 @@ private fun FotoLabScreen() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { ridimensionaAperto = !ridimensionaAperto },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF222631)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(18.dp)
                 ) {
                     Row(
@@ -577,7 +651,7 @@ private fun FotoLabScreen() {
                             Text(
                                 "$larghezzaTesto × $altezzaTesto px  •  ${percentuale.roundToInt()}%",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFBDB6CC)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
                             )
                         }
                         Text(
@@ -660,7 +734,7 @@ private fun FotoLabScreen() {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1D2029)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(18.dp)
                 ) {
                 Row(
@@ -678,7 +752,7 @@ private fun FotoLabScreen() {
                             else
                                 "PNG  •  senza perdita di qualità",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFBDB6CC)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
                         )
                     }
                     Text(
