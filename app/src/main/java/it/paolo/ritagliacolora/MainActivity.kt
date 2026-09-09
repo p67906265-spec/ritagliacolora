@@ -278,8 +278,16 @@ private fun FotoLabScreen() {
                             selected = rapportoRitaglio == item.second,
                             onClick = {
                                 rapportoRitaglio = item.second
-                                cropRect = null
                                 cropStart = null
+                                cropRect = if (item.second == null) {
+                                    null
+                                } else {
+                                    creaRitaglioCentrato(
+                                        bmp = bmp,
+                                        areaSize = areaSize,
+                                        ratio = item.second!!
+                                    )
+                                }
                             },
                             label = { Text(item.first) }
                         )
@@ -556,6 +564,47 @@ private fun FotoLabScreen() {
             }
         }
     }
+}
+
+
+private fun creaRitaglioCentrato(
+    bmp: Bitmap,
+    areaSize: IntSize,
+    ratio: Float
+): Rect? {
+    if (areaSize.width <= 0 || areaSize.height <= 0 || ratio <= 0f) return null
+
+    val scale = min(
+        areaSize.width.toFloat() / bmp.width,
+        areaSize.height.toFloat() / bmp.height
+    )
+
+    val dispW = bmp.width * scale
+    val dispH = bmp.height * scale
+    val offsetX = (areaSize.width - dispW) / 2f
+    val offsetY = (areaSize.height - dispH) / 2f
+
+    val margin = min(dispW, dispH) * 0.06f
+    val maxW = (dispW - margin * 2f).coerceAtLeast(1f)
+    val maxH = (dispH - margin * 2f).coerceAtLeast(1f)
+
+    var cropW = maxW
+    var cropH = cropW / ratio
+
+    if (cropH > maxH) {
+        cropH = maxH
+        cropW = cropH * ratio
+    }
+
+    val left = offsetX + (dispW - cropW) / 2f
+    val top = offsetY + (dispH - cropH) / 2f
+
+    return Rect(
+        left = left,
+        top = top,
+        right = left + cropW,
+        bottom = top + cropH
+    )
 }
 
 private fun creaRettangoloRitaglio(
