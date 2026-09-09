@@ -62,8 +62,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = Color(0xFFA98BFF),
+                    secondary = Color(0xFF8F7AD8),
+                    background = Color(0xFF101218),
+                    surface = Color(0xFF171A22),
+                    surfaceVariant = Color(0xFF222631),
+                    onBackground = Color(0xFFF2EEFA),
+                    onSurface = Color(0xFFF2EEFA)
+                )
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     FotoLabScreen()
                 }
             }
@@ -99,6 +112,7 @@ private fun FotoLabScreen() {
     var formato by remember { mutableStateOf(FormatoSalvataggio.JPG) }
     var qualitaJpg by remember { mutableStateOf(90f) }
     var dimensioneStimataMB by remember { mutableStateOf<Double?>(null) }
+    var ridimensionaAperto by remember { mutableStateOf(false) }
     val editorAperto = modalita != Modalita.NESSUNA
 
     fun impostaDimensioniDaBitmap(b: Bitmap) {
@@ -183,6 +197,10 @@ private fun FotoLabScreen() {
         topBar = {
             if (!editorAperto) TopAppBar(
                 title = { Text("FotoLab") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                ),
                 actions = {
                     TextButton(
                         enabled = undoStack.isNotEmpty() && bitmap != null,
@@ -343,8 +361,9 @@ private fun FotoLabScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .background(if (editorAperto) Color.Black else Color.Transparent)
-                    .padding(if (editorAperto) 0.dp else 8.dp)
+                    .padding(if (editorAperto) 0.dp else 12.dp)
+                    .clip(if (editorAperto) RoundedCornerShape(0.dp) else RoundedCornerShape(22.dp))
+                    .background(if (editorAperto) Color.Black else Color(0xFF1B1E27))
                     .onSizeChanged { areaSize = it }
             ) {
                 Image(
@@ -505,16 +524,47 @@ private fun FotoLabScreen() {
             if (!editorAperto) Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 310.dp)
+                    .heightIn(max = 360.dp)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                Text("Ridimensiona", style = MaterialTheme.typography.titleMedium)
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { ridimensionaAperto = !ridimensionaAperto },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF222631)),
+                    shape = RoundedCornerShape(18.dp)
                 ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Ridimensiona", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "$larghezzaTesto × $altezzaTesto px  •  ${percentuale.roundToInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFBDB6CC)
+                            )
+                        }
+                        Text(
+                            if (ridimensionaAperto) "Chiudi  ▲" else "Apri  ▼",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+
+                    if (ridimensionaAperto) Column(
+                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
+                    ) {
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                     OutlinedTextField(
                         value = larghezzaTesto,
                         onValueChange = { value ->
@@ -547,17 +597,17 @@ private fun FotoLabScreen() {
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
-                }
+                        }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = bloccaProporzioni,
                         onCheckedChange = { bloccaProporzioni = it }
                     )
                     Text("Mantieni proporzioni")
-                }
+                        }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${percentuale.roundToInt()}%")
                     Slider(
                         value = percentuale,
@@ -571,9 +621,19 @@ private fun FotoLabScreen() {
                         valueRange = 10f..100f,
                         modifier = Modifier.weight(1f)
                     )
+                        }
+                    }
                 }
 
-                Text("Formato", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF1D2029))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                Text("Esportazione", style = MaterialTheme.typography.titleMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
                         selected = formato == FormatoSalvataggio.JPG,
@@ -617,6 +677,7 @@ private fun FotoLabScreen() {
                         .fillMaxWidth()
                         .padding(top = 8.dp, bottom = 8.dp)
                 ) { Text("Salva immagine") }
+                }
             }
         }
     }
